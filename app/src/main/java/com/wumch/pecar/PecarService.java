@@ -1,7 +1,6 @@
 package com.wumch.pecar;
 
 import android.app.Notification;
-import android.content.Context;
 import android.content.Intent;
 import android.app.PendingIntent;
 import android.net.VpnService;
@@ -18,81 +17,72 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
-import java.util.*;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.ShortBufferException;
 
 
 public class PecarService extends VpnService implements Handler.Callback, Runnable
 {
-    private static final String TAG = "PecarService";
-    private static final int ONGOING_NOTIFICATION = 1;
-
     private final int authTimeout = 60000;
 
-    private final Crypto crypto = new Crypto(getApplicationContext());
+    private Crypto crypto;
 
-    private String mServerAddress;
-    private String mServerPort;
+    private String serverAddress;
+    private String serverPort;
     private byte[] username, password;
-    private byte[] mSharedSecret;
-    private PendingIntent mConfigureIntent;
+    private PendingIntent configIntent;
 
-    private Handler mHandler;
-    private Thread mThread;
+    private Handler handler;
+    private Thread thread;
 
-    private SocketChannel tunnel;
-    private ParcelFileDescriptor mInterface;
-    private String mParameters;
+    private SocketChannel upstream;
+    private ParcelFileDescriptor ifd;
 
     public class ResCode
     {
-        public static final byte OK = 0,
-            NONEXISTS = 1,
-            EXPIRED = 2,
-            TRAFFIC_EXHAUST = 3;
+        public static final int OK = 0;
+        public static final int NONEXISTS = 1;
+        public static final int EXPIRED = 2;
+        public static final int TRAFFIC_EXHAUST = 3;
     }
 
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    public int onStartCommand(Intent intent, int flags, int startId)
+    {
         // The handler is only used to show messages.
-        if (mHandler == null) {
-            mHandler = new Handler(this);
+        if (handler == null) {
+            handler = new Handler(this);
         }
 
         // Stop the previous session by interrupting the thread.
-        if (mThread != null) {
-            mThread.interrupt();
+        if (thread != null) {
+            thread.interrupt();
         }
 
         // Extract information from the intent.
         String prefix = getPackageName();
-        mServerAddress = intent.getStringExtra(prefix + ".ADDRESS");
-        mServerPort = intent.getStringExtra(prefix + ".PORT");
-        String sharedSecret = intent.getStringExtra(prefix + ".SECRET");
-        mSharedSecret = sharedSecret.getBytes();
+        serverAddress = intent.getStringExtra(prefix + ".ADDRESS");
+        serverPort = intent.getStringExtra(prefix + ".PORT");
         username = intent.getStringExtra(prefix + ".USERNAME").getBytes();
         password = intent.getStringExtra(prefix + ".PASSWORD").getBytes();
 
         fillDefaultParam();
 
-        Log.i(TAG, "secret:[" + new String(mSharedSecret) + "]");
-
-        // Start a new session by creating a new thread.
-        mThread = new Thread(this, "ToyVpnThread");
-        mThread.start();
-        start();
+        thread = new Thread(this, "ToyVpnThread");
+        thread.start();
+        foregroundStart();
         return START_STICKY;
     }
 
     private void fillDefaultParam()
     {
-        if (mServerAddress.isEmpty()) {
-            mServerAddress = "192.168.1.9";
+        if (serverAddress.isEmpty()) {
+            serverAddress = "192.168.1.9";
         }
-        if (mServerPort.isEmpty()) {
-            mServerPort = "1723";
-        }
-        if (mSharedSecret.length == 0) {
-            mSharedSecret = "test".getBytes();
+        if (serverPort.isEmpty()) {
+            serverPort = "1723";
         }
         if (username.length == 0) {
             username = "wumch".getBytes();
@@ -102,7 +92,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
     }
 
-    private void start()
+    private void foregroundStart()
     {
         Intent notificationIntent = new Intent(this, PecarClient.class);
         notificationIntent.setFlags(Notification.FLAG_ONGOING_EVENT);
@@ -118,14 +108,16 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     }
 
     @Override
-    public void onDestroy() {
-        if (mThread != null) {
-            mThread.interrupt();
+    public void onDestroy()
+    {
+        if (thread != null) {
+            thread.interrupt();
         }
     }
 
     @Override
-    public boolean handleMessage(Message message) {
+    public boolean handleMessage(Message message)
+    {
         if (message != null) {
             Toast.makeText(this, message.what, Toast.LENGTH_SHORT).show();
         }
@@ -133,69 +125,53 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     }
 
     @Override
-    public synchronized void run() {
+    public synchronized void run()
+    {
         try {
-            Log.i(TAG, "Starting");
-
-            // If anything needs to be obtained using the network, get it now.
-            // This greatly reduces the complexity of seamless handover, which
-            // tries to recreate the tunnel without shutting down everything.
-            // In this demo, all we need to know is the server address.
-            InetSocketAddress server = new InetSocketAddress(
-                    mServerAddress, Integer.parseInt(mServerPort));
-            Log.i(TAG, "server: [" + mServerAddress + ":" + Integer.toString(Integer.parseInt(mServerPort)) + "]");
-
-            // We try to create the tunnel for several times. The better way
-            // is to work with ConnectivityManager, such as trying only when
-            // the network is avaiable. Here we just use a counter to keep
-            // things simple.
-            for (int attempt = 0; attempt < 10; ++attempt) {
-                mHandler.sendEmptyMessage(R.string.connecting);
-
-                // Reset the counter if we were connected.
-                if (run(server)) {
-                    attempt = 0;
-                }
-
-                // Sleep for a while. This also checks if we got interrupted.
-                Thread.sleep(3000);
-            }
-            Log.i(TAG, "Giving up");
+            InetSocketAddress server = new InetSocketAddress(serverAddress, Integer.parseInt(serverPort));
+            Log.i(getText(R.string.log_tag).toString(), "server: [" + serverAddress + ":" + Integer.toString(Integer.parseInt(serverPort)) + "]");
+            handler.sendEmptyMessage(R.string.connecting);
+            run(server);
+            Log.i(getText(R.string.log_tag).toString(), "Giving up");
         } catch (Exception e) {
-            Log.e(TAG, "Got " + e.toString());
+            Log.e(getText(R.string.log_tag).toString(), "runserver(server) got " + e.toString());
         } finally {
             try {
-                mInterface.close();
-            } catch (Exception e) {
+                ifd.close();
+            } catch (IOException e) {
                 // ignore
+            } finally {
+                ifd = null;
+                handler.sendEmptyMessage(R.string.disconnected);
+                Log.i(getText(R.string.log_tag).toString(), "Exiting");
             }
-            mInterface = null;
-            mParameters = null;
-
-            mHandler.sendEmptyMessage(R.string.disconnected);
-            Log.i(TAG, "Exiting");
         }
     }
 
     private boolean run(InetSocketAddress server)
     {
-        boolean connected = true;
+        crypto = new Crypto(getText(R.string.log_tag).toString());
+        boolean connected = false;
         try {
             if (prepareTunnel(server)) {
-                mHandler.sendEmptyMessage(R.string.connected);
+                connected = true;
+                handler.sendEmptyMessage(R.string.connected);
+                configure();
                 work();
             } else {
                 connected = false;
             }
         } catch (IOException e) {
-            // TODO: notify user.
-            Log.e(TAG, "Got " + e.toString());
+            // TODO: maybe network error, notify user.
+            Log.e(getText(R.string.log_tag).toString(), "IO exception: " + e.toString());
+        } catch (Exception e) {
+            Log.e(getText(R.string.log_tag).toString(), "exception: " + e.toString());
         } finally {
             try {
-                if (tunnel.isOpen()) {
-                    tunnel.close();
+                if (upstream.isOpen()) {
+                    upstream.close();
                 }
-                mInterface.close();
+                ifd.close();
             } catch (IOException e) {
                 // ignore
             }
@@ -205,201 +181,107 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
 
     private boolean prepareTunnel(InetSocketAddress serverAddr) throws IOException
     {
-        tunnel = SocketChannel.open();
-        if (!protect(tunnel.socket())) {
-            throw new IllegalStateException("Cannot protect the tunnel");
+        upstream = SocketChannel.open();
+        if (!protect(upstream.socket())) {
+            throw new IllegalStateException("Cannot protect the upstream");
         }
-        tunnel.connect(serverAddr);
-        tunnel.configureBlocking(false);
+        upstream.connect(serverAddr);
+        upstream.configureBlocking(false);
         try {
-            return handshake(tunnel);
+            return handshake();
         } catch (Exception e) {
+            Log.i(getText(R.string.log_tag).toString(), "exception from handshake" );
             return false;
         }
     }
 
-    private boolean work() throws IOException
+    private boolean work() throws IOException, ShortBufferException, BadPaddingException, IllegalBlockSizeException, InterruptedException
     {
-        // Packets to be sent are queued in this input stream.
-        FileInputStream in = new FileInputStream(mInterface.getFileDescriptor());
+        FileInputStream dsr = new FileInputStream(ifd.getFileDescriptor());
+        FileOutputStream dsw = new FileOutputStream(ifd.getFileDescriptor());
 
-        // Packets received need to be written to this output stream.
-        FileOutputStream out = new FileOutputStream(mInterface.getFileDescriptor());
+        byte[] dr = new byte[32767];
+        byte[] dw = new byte[32767];
+        byte[] ur = new byte[32767];
+        byte[] uw = new byte[32767];
 
-        // Allocate the buffer for a single packet.
-        ByteBuffer packet = ByteBuffer.allocate(32767);
-
-        // We use a timer to determine the status of the tunnel. It
-        // works on both sides. A positive value means sending, and
-        // any other means receiving. We start with receiving.
-        int timer = 0;
-
-        // We keep forwarding packets till something goes wrong.
         while (true) {
-            // Assume that we did not make any progress in this iteration.
-            boolean idle = true;
-
-            // Read the outgoing packet from the input stream.
-            int length = in.read(packet.array());
-            if (length > 0) {
-                // Write the outgoing packet to the tunnel.
-                packet.limit(length);
-                tunnel.write(packet);
-                packet.clear();
-
-                // There might be more outgoing packets.
-                idle = false;
-
-                // If we were receiving, switch to sending.
-                if (timer < 1) {
-                    timer = 1;
-                }
+            int len = dsr.read(dr);
+            if (len > 0) {
+                crypto.encrypt(dr, len, uw);
+                int written = upstream.write(ByteBuffer.wrap(uw, 0, len));
+                Log.i(getText(R.string.log_tag).toString(), "upstream written: " + Integer.toString(written));
             }
 
-            // Read the incoming packet from the tunnel.
-            length = tunnel.read(packet);
-            if (length > 0) {
-                // Ignore control messages, which start with zero.
-                if (packet.get(0) != 0) {
-                    // Write the incoming packet to the output stream.
-                    out.write(packet.array(), 0, length);
-                }
-                packet.clear();
-
-                // There might be more incoming packets.
-                idle = false;
-
-                // If we were sending, switch to receiving.
-                if (timer > 0) {
-                    timer = 0;
-                }
+            len = upstream.read(ByteBuffer.wrap(ur, 0, ur.length));
+            if (len > 0) {
+                crypto.decrypt(ur, len, dw);
+                dsw.write(dw, 0, len);
             }
-
-            // If we are idle or waiting for the network, sleep for a
-            // fraction of time to avoid busy looping.
-            if (idle) {
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
-                    // ignore
-                }
-
-                // Increase the timer. This is inaccurate but good enough,
-                // since everything is operated in non-blocking mode.
-                timer += (timer > 0) ? 100 : -100;
-
-                // We are receiving for a long time but not sending.
-                if (timer < -15000) {
-                    // Send empty control messages.
-                    packet.put((byte) 0).limit(1);
-                    for (int i = 0; i < 3; ++i) {
-                        packet.position(0);
-                        tunnel.write(packet);
-                    }
-                    packet.clear();
-
-                    // Switch to sending.
-                    timer = 1;
-                }
-
-                // We are sending for a long time but not receiving.
-                if (timer > 20000) {
-                    throw new IllegalStateException("Timed out");
-                }
-            }
+            Thread.sleep(50);
         }
     }
 
-    private boolean handshake(SocketChannel tunnel) throws Exception
+    private boolean handshake() throws Exception
     {
-        byte[] keyIvChunk = new byte[512];
-        int filled = crypto.genKeyIvList(keyIvChunk);
-
-        ByteBuffer packet = ByteBuffer.allocate(1024);
-        packet.put(keyIvChunk, 0, filled);
-        packet.putChar((char)username.length);
+        ByteBuffer packet = ByteBuffer.allocate(128);
+        packet.position(crypto.genKeyIvList(packet.array()));
+        Log.i(getText(R.string.log_tag).toString(), "position: " + Integer.toString(packet.position()));
+        packet.put((byte)username.length);
+        packet.put((byte)password.length);
         packet.put(username);
-        packet.putChar((char)password.length);
         packet.put(password);
+        packet.flip();
+        int written = upstream.write(packet);
+        Log.i(getText(R.string.log_tag).toString(), "written: " + Integer.toString(written));
 
-        tunnel.write(packet);
         packet.clear();
-        packet.limit(1);
-
         final int interval = 100;
         for (int i = 0, end = (int)Math.ceil(authTimeout / interval); i < end; ++i) {
             Thread.sleep(interval);
-            if (tunnel.read(packet) > 0) {
-                switch (packet.get(0))
-                {
-                    case ResCode.OK:
-                        return true;
-                    case ResCode.NONEXISTS:
-                        break;
-                    case ResCode.EXPIRED:
-                        break;
-                    case ResCode.TRAFFIC_EXHAUST:
-                        break;
-                    default:
-                        break;
+            packet.limit(1);
+            int len = upstream.read(packet);
+            if (len > 0) {
+                packet.position(0);
+                int authRes = packet.get(0) & 0xff;
+                Log.i(getText(R.string.log_tag).toString(), "authRes: " + authRes + ", Rescode.OK: " + ResCode.OK);
+                if (authRes == 0) {
+                    Log.i(getText(R.string.log_tag).toString(), "authRes == 0" );
+                    return true;
+                } else if (authRes == 1) {
+                    Log.i(getText(R.string.log_tag).toString(), "authRes == 1" );
+                    return false;
+                } else if (authRes == 2) {
+                    Log.i(getText(R.string.log_tag).toString(), "authRes == 2" );
+                    return false;
+                } else if (authRes == 3) {
+                    Log.i(getText(R.string.log_tag).toString(), "authRes == 3" );
+                    return false;
+                } else {
+                    Log.i(getText(R.string.log_tag).toString(), "authRes == else" );
+                    return true;
                 }
-                return false;
             }
         }
+        Log.i(getText(R.string.log_tag).toString(), "authRes != any" );
         throw new IllegalStateException("Timed out");
     }
 
-    private void configure(String parameters) throws Exception {
-        // If the old interface has exactly the same parameters, use it!
-        if (mInterface != null && parameters.equals(mParameters)) {
-            Log.i(TAG, "Using the previous interface");
-            return;
-        }
-
-        // Configure a builder while parsing the parameters.
+    private void configure()
+    {
         Builder builder = new Builder();
-        for (String parameter : parameters.split(" ")) {
-            String[] fields = parameter.split(",");
+        builder.setMtu(1400)
+            .setSession(getText(R.string.app).toString())
+            .setConfigureIntent(configIntent)
+            .addRoute("0.0.0.0", 0)
+            .addAddress("10.0.0.2", 32);
+        if (ifd.getFd() >= 0) {
             try {
-                switch (fields[0].charAt(0)) {
-                    case 'm':
-                        builder.setMtu(Short.parseShort(fields[1]));
-                        Log.i(TAG, "mtu: [" + Integer.toString(Short.parseShort(fields[1])) + "]");
-                        break;
-                    case 'a':
-                        builder.addAddress(fields[1], Integer.parseInt(fields[2]));
-                        Log.i(TAG, "addr: [" + fields[1] + "/" + Integer.toString(Integer.parseInt(fields[2])) + "]");
-                        break;
-                    case 'r':
-                        builder.addRoute(fields[1], Integer.parseInt(fields[2]));
-                        Log.i(TAG, "route:[" + fields[1] + "/" + Integer.toString(Integer.parseInt(fields[2])) + "]");
-                        break;
-                    case 'd':
-                        builder.addDnsServer(fields[1]);
-                        Log.i(TAG,  "dns:[" + fields[1] + "]");
-                        break;
-                    case 's':
-                        builder.addSearchDomain(fields[1]);
-                        Log.i(TAG, "search: [" + fields[1] + "]");
-                        break;
-                }
+                ifd.close();
             } catch (Exception e) {
-                throw new IllegalArgumentException("Bad parameter: " + parameter);
+                // ignore
             }
         }
-
-        // Close the old interface since the parameters have been changed.
-        try {
-            mInterface.close();
-        } catch (Exception e) {
-            // ignore
-        }
-
-        // Create a new interface using the builder and save the parameters.
-        mInterface = builder.setSession(mServerAddress)
-                .setConfigureIntent(mConfigureIntent)
-                .establish();
-        mParameters = parameters;
-        Log.i(TAG, "New interface: " + parameters);
+        ifd = builder.establish();
     }
 }

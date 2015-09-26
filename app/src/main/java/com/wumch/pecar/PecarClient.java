@@ -7,12 +7,12 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.TextView;
 
-public class PecarClient extends Activity implements View.OnClickListener {
-
+public class PecarClient extends Activity implements View.OnClickListener
+{
     private TextView username;
     private TextView password;
-    private TextView mServerAddress;
-    private TextView mServerPort;
+    private TextView serverAddress;
+    private TextView serverPort;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -21,8 +21,8 @@ public class PecarClient extends Activity implements View.OnClickListener {
 
         username = (TextView) findViewById(R.id.username);
         password = (TextView) findViewById(R.id.password);
-        mServerAddress = (TextView) findViewById(R.id.address);
-        mServerPort = (TextView) findViewById(R.id.port);
+        serverAddress = (TextView) findViewById(R.id.address);
+        serverPort = (TextView) findViewById(R.id.port);
 
         findViewById(R.id.connect).setOnClickListener(this);
     }
@@ -38,14 +38,15 @@ public class PecarClient extends Activity implements View.OnClickListener {
     }
 
     @Override
-    protected void onActivityResult(int request, int result, Intent data) {
+    protected void onActivityResult(int request, int result, Intent data)
+    {
         if (result == RESULT_OK) {
             String prefix = getPackageName();
             Intent intent = new Intent(this, PecarService.class)
-                    .putExtra(prefix + ".USERNAME", username.getText().toString())
-                    .putExtra(prefix + ".PASSWORD", password.getText().toString())
-                    .putExtra(prefix + ".ADDRESS", mServerAddress.getText().toString())
-                    .putExtra(prefix + ".PORT", mServerPort.getText().toString());
+                .putExtra(prefix + ".USERNAME", username.getText().toString())
+                .putExtra(prefix + ".PASSWORD", password.getText().toString())
+                .putExtra(prefix + ".ADDRESS", serverAddress.getText().toString())
+                .putExtra(prefix + ".PORT", serverPort.getText().toString());
             startService(intent);
         }
     }

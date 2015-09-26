@@ -26,7 +26,7 @@
         <EditText style="@style/item" android:id="@+id/username"/>
 
         <TextView style="@style/item" android:text="@string/password"/>
-        <EditText style="@style/item" android:id="@+id/password" android:inputType="textVisiblePassword"/>
+        <EditText style="@style/item" android:id="@+id/password" android:inputType="textPassword"/>
 
         <TextView style="@style/item" android:text="@string/address"/>
         <EditText style="@style/item" android:id="@+id/address"/>

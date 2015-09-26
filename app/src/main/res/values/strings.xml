@@ -2,22 +2,21 @@
     <string name="app_name">Pecar</string>
     <string name="title_activity_pecar">Pecar Title</string>
     <string name="app">Pecar</string>
-    <string name="log_tag">@string/app_name</string>
+    <string name="log_tag">@string/app</string>
     <string name="action_settings">Pecar Settings</string>
 
-    <string name="username">Server Address:</string>
-    <string name="password">Server Address:</string>
+    <string name="username">username:</string>
+    <string name="password">password:</string>
     <string name="address">Server Address:</string>
     <string name="port">Server Port:</string>
-    <string name="secret">Shared Secret:</string>
-    <string name="connect">Connect!</string>
+    <string name="connect">Connect</string>
 
     <string name="connecting">Pecar is connecting...</string>
-    <string name="connected">Pecar is connected!</string>
-    <string name="disconnected">Pecar is disconnected!</string>
+    <string name="connected">Pecar is connected</string>
+    <string name="disconnected">Pecar is disconnected</string>
 
-    <string name="notice">this is a notice!</string>
-    <string name="notification_title">notification title!</string>
-    <string name="notification_content">this is notification content!</string>
+    <string name="notice">this is a notice</string>
+    <string name="notification_title">notification title</string>
+    <string name="notification_content">this is notification content</string>
 
 </resources>

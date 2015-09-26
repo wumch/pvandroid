@@ -1,9 +1,8 @@
 package com.wumch.pecar;
 
-
-import android.content.Context;
 import android.util.Log;
 
+import java.nio.ByteBuffer;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 
@@ -12,38 +11,33 @@ import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 class Crypto
 {
     private String LOG_TAG;
-    private final String encAlgo = "AES/CFB/NoPadding";
-    private final String decAlgo = "AES/CFB/NoPadding";
 
     private Cipher encor;
     private Cipher decor;
 
-    Crypto(Context context)
+    Crypto(String logTag)
     {
-        setLogTag(context.getText(R.string.log_tag).toString());
-    }
-
-    public byte[] encrypt(byte[] plain) throws BadPaddingException, IllegalBlockSizeException
-    {
-        return plain;
-//        return encor.doFinal(plain);
-    }
-
-    public byte[] decrypt(byte[] encrypted) throws BadPaddingException, IllegalBlockSizeException
-    {
-        return encrypted;
-//        return decor.doFinal(encrypted);
-    }
-
-    public void setLogTag(String logTag)
-    {
+        super();
         LOG_TAG = logTag;
+    }
+
+    public void encrypt(byte[] in, int len, byte[] out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        System.arraycopy(in, 0, out, 0, len);
+//        encor.doFinal(in.array(), 0, len, out.array());
+    }
+
+    public void decrypt(byte[] in, int len, byte[] out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        System.arraycopy(in, 0, out, 0, len);
+//        decor.doFinal(in.array(), 0, len, out.array());
     }
 
     public void setEncKeyIv(byte[] key, byte[] iv)
@@ -51,7 +45,7 @@ class Crypto
         SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
         try {
-            encor = Cipher.getInstance(encAlgo);
+            encor = Cipher.getInstance("AES/CFB/NoPadding");
             encor.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
         } catch (Exception e) {
             Log.i(LOG_TAG, e.getMessage());
@@ -63,7 +57,7 @@ class Crypto
         SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
         try {
-            decor = Cipher.getInstance(decAlgo);
+            decor = Cipher.getInstance("AES/CFB/NoPadding");
             decor.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
         } catch (Exception e) {
             Log.i(LOG_TAG, e.getMessage());
