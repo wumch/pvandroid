@@ -14,7 +14,9 @@ import android.widget.Toast;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 
@@ -30,6 +32,8 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     private String serverAddress;
     private String serverPort;
     private byte[] username, password;
+    private InetSocketAddress serverAddr;
+    private Builder ifdBuilder;
 
     private Crypto crypto;
     private Handler handler;
@@ -60,6 +64,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         username = intent.getStringExtra(prefix + ".USERNAME").getBytes();
         password = intent.getStringExtra(prefix + ".PASSWORD").getBytes();
         fillDefaultParam();
+        serverAddr = new InetSocketAddress(serverAddress, Integer.parseInt(serverPort));
 
         thread = new Thread(this, "PecarThread");
         thread.start();
@@ -70,7 +75,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     private void fillDefaultParam()
     {
         if (serverAddress.isEmpty()) {
-            serverAddress = "192.168.1.9";
+            serverAddress = "192.168.88.157";
         }
         if (serverPort.isEmpty()) {
             serverPort = "1723";
@@ -116,11 +121,11 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     @Override
     public synchronized void run()
     {
+        crypto = new Crypto(getText(R.string.log_tag).toString());  // Crypto is order sensitive.
         try {
-            InetSocketAddress server = new InetSocketAddress(serverAddress, Integer.parseInt(serverPort));
             Log.i(getText(R.string.log_tag).toString(), "server: [" + serverAddress + ":" + Integer.toString(Integer.parseInt(serverPort)) + "]");
             handler.sendEmptyMessage(R.string.connecting);
-            run(server);
+            doRun();
             Log.i(getText(R.string.log_tag).toString(), "run out");
         } catch (Exception e) {
             Log.e(getText(R.string.log_tag).toString(), "runserver(server) got " + e.toString());
@@ -137,20 +142,20 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
     }
 
-    private void run(InetSocketAddress server)
+    private void doRun()
     {
-        crypto = new Crypto(getText(R.string.log_tag).toString());
         try {
-            if (prepareUpstream(server)) {
+            if (prepareUpstream()) {
                 handler.sendEmptyMessage(R.string.connected);
-                configure();
+                prepareIfdBuilder();
+                prepareIfd();
                 work();
             }
         } catch (IOException e) {
             // TODO: maybe network error, notify user.
-            Log.e(getText(R.string.log_tag).toString(), "IO exception: " + e.toString());
+            Log.e(getText(R.string.log_tag).toString(), "IO exception doRun()->catch(IOException): " + e.toString());
         } catch (Exception e) {
-            Log.e(getText(R.string.log_tag).toString(), "exception: " + e.toString());
+            Log.e(getText(R.string.log_tag).toString(), "exception doRun()->catch(Exception): " + e.toString());
         } finally {
             try {
                 if (upstream.isOpen()) {
@@ -158,36 +163,8 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 }
                 ifd.close();
             } catch (IOException e) {
-                Log.e(getText(R.string.log_tag).toString(), "exception (run(InetSocketAddress)->finally->catch(IOException)): " + e.toString());
+                Log.e(getText(R.string.log_tag).toString(), "exception doRun()->finally->catch(IOException): " + e.toString());
             }
-        }
-    }
-
-    private PendingIntent getConfigIntent()
-    {
-        // make the configure Button show the Log
-        Intent intent = new Intent(getBaseContext(), PecarClient.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        PendingIntent startLW = PendingIntent.getActivity(this, 0, intent, 0);
-        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        return startLW;
-
-    }
-
-    private boolean prepareUpstream(InetSocketAddress serverAddr) throws IOException
-    {
-        upstream = SocketChannel.open();
-        if (!protect(upstream.socket())) {
-            throw new IllegalStateException("Cannot protect the upstream");
-        }
-        upstream.connect(serverAddr);
-        upstream.configureBlocking(false);
-        try {
-            return handshake();
-        } catch (Exception e) {
-            Log.i(getText(R.string.log_tag).toString(), e.getClass().toString() +
-                "prepareUpstream(InetSocketAddress)->try->catch(Exception): " + e.getMessage());
-            return false;
         }
     }
 
@@ -201,14 +178,60 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             ur = new byte[32767],
             uw = new byte[32767];
 
+        ByteBuffer bufdr = ByteBuffer.allocate(32767);
+        ByteBuffer bufdw = ByteBuffer.allocate(32767);
+        ByteBuffer bufur = ByteBuffer.allocate(32767);
+        ByteBuffer bufuw = ByteBuffer.allocate(32767);
+
+        int turn = 0;
+        while (true) {
+            int len = dsr.read(bufdr.array());
+            if (len > 0) {
+                bufdr.limit(len);
+                crypto.encrypt(bufdr.array(), len, bufuw.array());
+                bufuw.limit(len);
+                try {
+                    upstream.write(bufdr);
+                } catch (SocketException e) {
+                    Log.i(getText(R.string.log_tag).toString(), "re-prepareUpstream: wrok()->try->catch(SocketException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
+                    prepareUpstream();
+                } catch (IOException e) {
+                    Log.i(getText(R.string.log_tag).toString(), "wrok()->try->catch(IOException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
+                }
+                bufdr.clear();
+            }
+
+            len = upstream.read(bufur);
+            if (len > 0) {
+                ++turn;
+                try {
+                    if (len > 1400) {
+                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") big packet: [" + len + "] first byte: " + (int)bufdr.array()[0]);
+                    }
+                    dsw.write(bufur.array(), 0, len);
+                } catch (IOException e) {
+                    Thread.sleep(10);
+                    try {
+                        dsw.write(bufur.array(), 0, len);
+                    } catch (IOException e1) {
+                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
+                    }
+                    if (ifd == null || !ifd.getFileDescriptor().valid()) {
+                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") " + "first byte: " + (int)bufdr.array()[0] +  "re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
+                        prepareIfd();
+                    }
+                    Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
+                }
+                bufur.clear();
+            }
+            Thread.sleep(workInterval);
+        }
+        /*
         while (true) {
             int len = dsr.read(dr);
             if (len > 0) {
                 crypto.encrypt(dr, len, uw);
-                int written = upstream.write(ByteBuffer.wrap(uw, 0, len));
-                int written2 = upstream.write(ByteBuffer.wrap(uw, 0, len));     // TODO: test only
-                int written3 = upstream.write(ByteBuffer.wrap(uw, 0, len));     // TODO: test only
-                int written4 = upstream.write(ByteBuffer.wrap(uw, 0, len));     // TODO: test only
+                upstream.write(ByteBuffer.wrap(uw, 0, len));
             }
 
             len = upstream.read(ByteBuffer.wrap(ur, 0, ur.length));
@@ -218,13 +241,14 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             }
             Thread.sleep(workInterval);
         }
+        // */
     }
 
     private boolean handshake() throws Exception
     {
         ByteBuffer packet = ByteBuffer.allocate(128);
         packet.position(crypto.genKeyIvList(packet.array()));
-        packet.put((byte) username.length);
+        packet.put((byte)username.length);
         packet.put((byte)password.length);
         packet.put(username);
         packet.put(password);
@@ -269,19 +293,55 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 ifd.close();
             } catch (Exception e) {
                 Log.i(getText(R.string.log_tag).toString(), e.getClass().toString() +
-                        "configure()->try->catch(Exception): " + e.getMessage());
+                        " destroy()->try->catch(Exception): " + e.getMessage());
             }
         }
     }
 
-    private void configure()
+    private PendingIntent getConfigIntent()
     {
-        ifd = new Builder()
+        // make the prepareIfdBuilder Button show the Log
+        Intent intent = new Intent(getBaseContext(), PecarClient.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        PendingIntent startLW = PendingIntent.getActivity(this, 0, intent, 0);
+        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        return startLW;
+
+    }
+
+    private boolean prepareUpstream() throws IOException
+    {
+        if (upstream != null && upstream.isConnected()) {
+            upstream.close();
+        }
+        upstream = SocketChannel.open();
+        if (!protect(upstream.socket())) {
+            throw new IllegalStateException("Cannot protect the upstream");
+        }
+        upstream.connect(serverAddr);
+        upstream.configureBlocking(false);
+        try {
+            return handshake();
+        } catch (Exception e) {
+            Log.i(getText(R.string.log_tag).toString(), e.getClass().toString() +
+                    "prepareUpstream(InetSocketAddress)->try->catch(Exception): " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void prepareIfd()
+    {
+        Log.i(getText(R.string.log_tag).toString(), "allocate fd");
+        ifd = ifdBuilder.establish();
+    }
+
+    private void prepareIfdBuilder()
+    {
+        ifdBuilder = new Builder()
             .setMtu(1400)
             .setSession(getText(R.string.app).toString())
             .setConfigureIntent(getConfigIntent())
             .addRoute("0.0.0.0", 0)
-            .addAddress("10.0.0.2", 32)
-            .establish();
+            .addAddress("10.0.0.2", 32);
     }
 }
