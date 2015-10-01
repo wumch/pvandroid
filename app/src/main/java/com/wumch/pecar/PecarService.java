@@ -14,7 +14,6 @@ import android.widget.Toast;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
@@ -27,7 +26,10 @@ import javax.crypto.ShortBufferException;
 public class PecarService extends VpnService implements Handler.Callback, Runnable
 {
     private final int authTimeout = 60000;
-    private final int workInterval = 50;
+    private final int workInterval = 5;
+    private final int workIntervalMax = 10000;
+    private final int idleInterval = 10000;
+    private final int ipPackMinLen = 20;
 
     private String serverAddress;
     private String serverPort;
@@ -41,6 +43,8 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
 
     private SocketChannel upstream;
     private ParcelFileDescriptor ifd;
+    private FileInputStream dsr;
+    private FileOutputStream dsw;
 
     public class ResCode
     {
@@ -156,6 +160,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             Log.e(getText(R.string.log_tag).toString(), "IO exception doRun()->catch(IOException): " + e.toString());
         } catch (Exception e) {
             Log.e(getText(R.string.log_tag).toString(), "exception doRun()->catch(Exception): " + e.toString());
+            e.printStackTrace();
         } finally {
             try {
                 if (upstream.isOpen()) {
@@ -170,28 +175,29 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
 
     private boolean work() throws IOException, ShortBufferException, BadPaddingException, IllegalBlockSizeException, InterruptedException
     {
-        FileInputStream dsr = new FileInputStream(ifd.getFileDescriptor());
-        FileOutputStream dsw = new FileOutputStream(ifd.getFileDescriptor());
+        dsr = new FileInputStream(ifd.getFileDescriptor());
+        dsw = new FileOutputStream(ifd.getFileDescriptor());
 
-        byte[] dr = new byte[32767],
-            dw = new byte[32767],
-            ur = new byte[32767],
-            uw = new byte[32767];
-
-        ByteBuffer bufdr = ByteBuffer.allocate(32767);
-        ByteBuffer bufdw = ByteBuffer.allocate(32767);
-        ByteBuffer bufur = ByteBuffer.allocate(32767);
-        ByteBuffer bufuw = ByteBuffer.allocate(32767);
+        ByteBuffer bufdr = ByteBuffer.allocate(65535);
+        ByteBuffer bufdw = ByteBuffer.allocate(65535);
+        ByteBuffer bufur = ByteBuffer.allocate(65535);
+        ByteBuffer bufuw = ByteBuffer.allocate(65535);
 
         int turn = 0;
+        int continuedInactive = 0;
+        boolean inactive, isFirstInactive = true;
+        int continuedIdle = 0;
+        long lastActive = System.currentTimeMillis();
         while (true) {
+            inactive = true;
             int len = dsr.read(bufdr.array());
             if (len > 0) {
+                inactive = false;
                 bufdr.limit(len);
-                crypto.encrypt(bufdr.array(), len, bufuw.array());
-                bufuw.limit(len);
+                crypto.encrypt(bufdr, len, bufuw);
+                bufuw.flip();
                 try {
-                    upstream.write(bufdr);
+                    upstream.write(bufuw);
                 } catch (SocketException e) {
                     Log.i(getText(R.string.log_tag).toString(), "re-prepareUpstream: wrok()->try->catch(SocketException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
                     prepareUpstream();
@@ -199,16 +205,41 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     Log.i(getText(R.string.log_tag).toString(), "wrok()->try->catch(IOException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
                 }
                 bufdr.clear();
+                bufuw.clear();
             }
 
             len = upstream.read(bufur);
             if (len > 0) {
+                inactive = false;
                 ++turn;
                 try {
-                    if (len > 1400) {
-                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") big packet: [" + len + "] first byte: " + (int)bufdr.array()[0]);
+                    bufur.flip();
+                    crypto.decrypt(bufur, len, bufdw);
+                    bufur.clear();
+                    final int totalBytes = bufdw.position();
+                    if (totalBytes >= ipPackMinLen)
+                    {
+                        int packLen = bufdw.getShort(2) & 0xffff;
+                        if (packLen == totalBytes)
+                        {
+                            dsw.write(bufdw.array(), 0, totalBytes);
+                        }
+                        else if (packLen < totalBytes)
+                        {
+                            bufdw.flip();
+                            while (dsWritePack(bufdw, bufur.array())) {}  // reuse bufur as cache
+                            bufur.limit(bufur.capacity() - (bufdw.limit() - bufdw.position()));
+                            leftAlignBuffer(bufdw);
+                        }
+                        else
+                        {
+                            bufur.limit(bufur.capacity() - totalBytes);
+                        }
                     }
-                    dsw.write(bufur.array(), 0, len);
+                    else
+                    {
+                        bufur.limit(bufur.capacity() - totalBytes);
+                    }
                 } catch (IOException e) {
                     Thread.sleep(10);
                     try {
@@ -216,32 +247,82 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     } catch (IOException e1) {
                         Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
                     }
-                    if (ifd == null || !ifd.getFileDescriptor().valid()) {
+                    if (!ifd.getFileDescriptor().valid()) {
                         Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") " + "first byte: " + (int)bufdr.array()[0] +  "re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
                         prepareIfd();
                     }
                     Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
                 }
-                bufur.clear();
             }
-            Thread.sleep(workInterval);
-        }
-        /*
-        while (true) {
-            int len = dsr.read(dr);
-            if (len > 0) {
-                crypto.encrypt(dr, len, uw);
-                upstream.write(ByteBuffer.wrap(uw, 0, len));
+/*
+            if (inactive)
+            {
+                if (++continuedInactive > 10)
+                {
+                    continuedInactive = 0;
+                    if (System.currentTimeMillis() - lastActive > idleInterval)
+                    {
+                        ++continuedIdle;
+                    }
+                    Thread.sleep(Math.min(++continuedIdle * workInterval, workIntervalMax));
+                }
+                else
+                {
+                    if (isFirstInactive)
+                    {
+                        isFirstInactive = false;
+                        lastActive = System.currentTimeMillis();
+                    }
+                    Thread.sleep(0);
+                }
             }
-
-            len = upstream.read(ByteBuffer.wrap(ur, 0, ur.length));
-            if (len > 0) {
-                crypto.decrypt(ur, len, dw);
-                dsw.write(dw, 0, len);
+            else
+            {
+                continuedInactive = 0;
+                continuedIdle = 0;
+                isFirstInactive = true;
             }
-            Thread.sleep(workInterval);
-        }
         // */
+        }
+    }
+
+    private boolean dsWritePack(ByteBuffer data, byte[] cache) throws IOException
+    {
+        int packLen = data.getShort(data.position() + 2) & 0xffff;
+        int bytesRemain = data.limit() - data.position();
+        if (bytesRemain < packLen)
+        {
+            return false;
+        }
+        else
+        {
+            data.get(cache, 0, packLen);
+            dsw.write(cache, 0, packLen);
+            return bytesRemain - packLen >= ipPackMinLen;
+        }
+    }
+
+    private void leftAlignBuffer(ByteBuffer buffer)
+    {
+        int bytesRemain = buffer.limit() - buffer.position();
+        if (bytesRemain > 0)
+        {
+            if (bytesRemain <= buffer.position())
+            {
+                System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, bytesRemain);
+            }
+            else
+            {
+                for (int step = buffer.position(), src = buffer.position(), dest = 0, remainBytes = bytesRemain;
+                     remainBytes > 0;
+                     remainBytes -= step, src += step, dest += step)
+                {
+                    System.arraycopy(buffer.array(), src, buffer.array(), dest, step);
+                }
+            }
+        }
+        buffer.clear();
+        buffer.position(bytesRemain);
     }
 
     private boolean handshake() throws Exception

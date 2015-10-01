@@ -15,7 +15,7 @@ import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
-class Crypto
+final class Crypto
 {
     private String LOG_TAG;
 
@@ -28,19 +28,23 @@ class Crypto
         LOG_TAG = logTag;
     }
 
-    public void encrypt(byte[] in, int len, byte[] out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    public final void encrypt(ByteBuffer in, int len, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-        System.arraycopy(in, 0, out, 0, len);
-//        encor.doFinal(in.array(), 0, len, out.array());
+        in.get(out.array(), out.position(), len);
+//        out.put(encor.doFinal(in.array(), 0, len));
+        out.clear();
+        out.position(out.position() + len);
     }
 
-    public void decrypt(byte[] in, int len, byte[] out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    public final void decrypt(ByteBuffer in, int len, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-        System.arraycopy(in, 0, out, 0, len);
-//        decor.doFinal(in.array(), 0, len, out.array());
+        in.get(out.array(), out.position(), len);
+//        out.put(encor.doFinal(in.array(), 0, len));
+        out.clear();
+        out.position(out.position() + len);
     }
 
-    public void setEncKeyIv(byte[] key, byte[] iv)
+    public final void setEncKeyIv(byte[] key, byte[] iv)
     {
         SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
@@ -52,7 +56,7 @@ class Crypto
         }
     }
 
-    public void setDecKeyIv(byte[] key, byte[] iv)
+    public final void setDecKeyIv(byte[] key, byte[] iv)
     {
         SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
@@ -64,7 +68,7 @@ class Crypto
         }
     }
 
-    public int genKeyIvList(byte[] chunk) throws NoSuchAlgorithmException
+    public final int genKeyIvList(byte[] chunk) throws NoSuchAlgorithmException
     {
         final int KEY_BITS = 128;
         final int BLOCK_BITS = 128;
