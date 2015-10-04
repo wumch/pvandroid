@@ -11,11 +11,12 @@ import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 import android.widget.Toast;
 
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 
@@ -25,6 +26,8 @@ import javax.crypto.ShortBufferException;
 
 public class PecarService extends VpnService implements Handler.Callback, Runnable
 {
+    private String LOG_TAG;
+
     private final int authTimeout = 60000;
     private final int workInterval = 5;
     private final int workIntervalMax = 10000;
@@ -58,7 +61,20 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     public int onStartCommand(Intent intent, int flags, int startId)
     {
         destroy();
+        try {
+            String filePath = "/sdcard/pecar-client.txt";
+            File file = new File(filePath);
+            if (!file.exists()) {
+                if (!file.createNewFile()) {
+                    throw new RuntimeException("create file failed");
+                }
+            }
+            out = new FileOutputStream(file);
+        } catch (Exception e) {
+            logException(e, "file not found");
+        }
 
+        LOG_TAG = getText(R.string.log_tag).toString();
         if (handler == null) {
             handler = new Handler(this);
         }
@@ -79,7 +95,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     private void fillDefaultParam()
     {
         if (serverAddress.isEmpty()) {
-            serverAddress = "192.168.88.157";
+            serverAddress = "192.168.1.9";
         }
         if (serverPort.isEmpty()) {
             serverPort = "1723";
@@ -127,68 +143,59 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     {
         crypto = new Crypto(getText(R.string.log_tag).toString());  // Crypto is order sensitive.
         try {
-            Log.i(getText(R.string.log_tag).toString(), "server: [" + serverAddress + ":" + Integer.toString(Integer.parseInt(serverPort)) + "]");
+            Log.i(LOG_TAG, "server: [" + serverAddress + ":" + Integer.toString(Integer.parseInt(serverPort)) + "]");
             handler.sendEmptyMessage(R.string.connecting);
             doRun();
-            Log.i(getText(R.string.log_tag).toString(), "run out");
+            Log.i(LOG_TAG, "run out");
         } catch (Exception e) {
-            Log.e(getText(R.string.log_tag).toString(), "runserver(server) got " + e.toString());
+            Log.e(LOG_TAG, "runserver(server) got " + e.toString());
         } finally {
             try {
                 ifd.close();
             } catch (IOException e) {
-                Log.i(getText(R.string.log_tag).toString(), "run()->finally->catch(IOException): " + e.getMessage());
+                Log.e(LOG_TAG, "run()->finally->catch(IOException): " + e.getMessage());
             } finally {
                 ifd = null;
                 handler.sendEmptyMessage(R.string.disconnected);
-                Log.i(getText(R.string.log_tag).toString(), "run()->finally->finanlly");
+                Log.i(LOG_TAG, "run()->finally->finanlly");
             }
         }
     }
 
     private void doRun()
     {
-        try {
-            if (prepareUpstream()) {
-                handler.sendEmptyMessage(R.string.connected);
-                prepareIfdBuilder();
-                prepareIfd();
-                work();
-            }
-        } catch (IOException e) {
-            // TODO: maybe network error, notify user.
-            Log.e(getText(R.string.log_tag).toString(), "IO exception doRun()->catch(IOException): " + e.toString());
-        } catch (Exception e) {
-            Log.e(getText(R.string.log_tag).toString(), "exception doRun()->catch(Exception): " + e.toString());
-            e.printStackTrace();
-        } finally {
+        if (prepareUpstream())
+        {
+            handler.sendEmptyMessage(R.string.connected);
+            prepareIfdBuilder();
+            prepareIfd();
             try {
-                if (upstream.isOpen()) {
-                    upstream.close();
-                }
-                ifd.close();
+                work();
             } catch (IOException e) {
-                Log.e(getText(R.string.log_tag).toString(), "exception doRun()->finally->catch(IOException): " + e.toString());
+                // TODO: maybe network error, notify user.
+                logException(e, "exception doRun()->catch(IOException)");
+            } catch (Exception e) {
+                logException(e, "exception doRun()->catch(Exception)");
             }
         }
     }
 
-    private boolean work() throws IOException, ShortBufferException, BadPaddingException, IllegalBlockSizeException, InterruptedException
+    private void work() throws IOException, ShortBufferException, BadPaddingException, IllegalBlockSizeException, InterruptedException, RuntimeException
     {
         dsr = new FileInputStream(ifd.getFileDescriptor());
         dsw = new FileOutputStream(ifd.getFileDescriptor());
 
-        ByteBuffer bufdr = ByteBuffer.allocate(65535);
-        ByteBuffer bufdw = ByteBuffer.allocate(65535);
-        ByteBuffer bufur = ByteBuffer.allocate(65535);
-        ByteBuffer bufuw = ByteBuffer.allocate(65535);
+        ByteBuffer bufdr = ByteBuffer.allocate(65536),
+            bufdw = ByteBuffer.allocate(65536),
+            bufur = ByteBuffer.allocate(65536),
+            bufuw = ByteBuffer.allocate(65536);
 
         int turn = 0;
         int continuedInactive = 0;
         boolean inactive, isFirstInactive = true;
         int continuedIdle = 0;
         long lastActive = System.currentTimeMillis();
-        while (true) {
+        while (!thread.isInterrupted()) {
             inactive = true;
             int len = dsr.read(bufdr.array());
             if (len > 0) {
@@ -196,14 +203,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 bufdr.limit(len);
                 crypto.encrypt(bufdr, len, bufuw);
                 bufuw.flip();
-                try {
-                    upstream.write(bufuw);
-                } catch (SocketException e) {
-                    Log.i(getText(R.string.log_tag).toString(), "re-prepareUpstream: wrok()->try->catch(SocketException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
-                    prepareUpstream();
-                } catch (IOException e) {
-                    Log.i(getText(R.string.log_tag).toString(), "wrok()->try->catch(IOException)-1: [" + e.getClass().getName() + "]" + e.getMessage());
-                }
+                upstream.write(bufuw);
                 bufdr.clear();
                 bufuw.clear();
             }
@@ -212,46 +212,35 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             if (len > 0) {
                 inactive = false;
                 ++turn;
-                try {
-                    bufur.flip();
-                    crypto.decrypt(bufur, len, bufdw);
-                    bufur.clear();
-                    final int totalBytes = bufdw.position();
-                    if (totalBytes >= ipPackMinLen)
+                bufur.flip();
+                dumpData(bufur.array(), len);
+                crypto.decrypt(bufur, len, bufdw);
+                bufur.clear();
+                final int totalBytes = bufdw.position();
+                if (totalBytes >= ipPackMinLen)
+                {
+                    int firstPackLen = bufdw.getShort(2) & 0xffff;
+                    if (firstPackLen == totalBytes)
                     {
-                        int packLen = bufdw.getShort(2) & 0xffff;
-                        if (packLen == totalBytes)
-                        {
-                            dsw.write(bufdw.array(), 0, totalBytes);
-                        }
-                        else if (packLen < totalBytes)
-                        {
-                            bufdw.flip();
-                            while (dsWritePack(bufdw, bufur.array())) {}  // reuse bufur as cache
-                            bufur.limit(bufur.capacity() - (bufdw.limit() - bufdw.position()));
-                            leftAlignBuffer(bufdw);
-                        }
-                        else
-                        {
-                            bufur.limit(bufur.capacity() - totalBytes);
-                        }
+//                        Log.i(LOG_TAG, "firstPackLen:" + firstPackLen);
+                        dsw.write(bufdw.array(), 0, totalBytes);
+                        bufdw.clear();
+                    }
+                    else if (firstPackLen < totalBytes)
+                    {
+                        bufdw.flip();
+                        while (dsWritePack(bufdw, bufur.array())) {}  // reuse bufur as cache
+                        leftAlignBuffer(bufdw, bufur.array());
+                        bufur.limit(bufur.capacity() - bufdw.position());
                     }
                     else
                     {
                         bufur.limit(bufur.capacity() - totalBytes);
                     }
-                } catch (IOException e) {
-                    Thread.sleep(10);
-                    try {
-                        dsw.write(bufur.array(), 0, len);
-                    } catch (IOException e1) {
-                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
-                    }
-                    if (!ifd.getFileDescriptor().valid()) {
-                        Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") " + "first byte: " + (int)bufdr.array()[0] +  "re-prepareIfd: wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
-                        prepareIfd();
-                    }
-                    Log.i(getText(R.string.log_tag).toString(), "fd(" + ifd.getFd() + ") turn(" + turn + ") wrok()->try->catch(IOException)-2: [" + e.getClass().getName() + "]" + e.getMessage());
+                }
+                else
+                {
+                    bufur.limit(bufur.capacity() - totalBytes);
                 }
             }
 /*
@@ -286,6 +275,19 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
     }
 
+    private FileOutputStream out;
+    private void dumpData(byte[] data, int len) throws IOException
+    {
+        StringBuilder builder = new StringBuilder(len * 5);
+        for (int i = 0; i < len; ++i)
+        {
+            builder.append(Integer.toString((int)data[i]));
+            builder.append(",");
+        }
+        builder.append("\n");
+        out.write(builder.toString().getBytes());
+    }
+
     private boolean dsWritePack(ByteBuffer data, byte[] cache) throws IOException
     {
         int packLen = data.getShort(data.position() + 2) & 0xffff;
@@ -297,16 +299,24 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         else
         {
             data.get(cache, 0, packLen);
+//            Log.i(LOG_TAG, "packLen:" + packLen);
             dsw.write(cache, 0, packLen);
             return bytesRemain - packLen >= ipPackMinLen;
         }
     }
 
-    private void leftAlignBuffer(ByteBuffer buffer)
+    private void leftAlignBuffer(ByteBuffer buffer, byte[] cache) throws RuntimeException
     {
         int bytesRemain = buffer.limit() - buffer.position();
-        if (bytesRemain > 0)
+        if (bytesRemain == 0)
         {
+            buffer.clear();
+        }
+        else if (bytesRemain > 0)
+        {
+            System.arraycopy(buffer.array(), buffer.position(), cache, 0, bytesRemain);
+            System.arraycopy(cache, 0, buffer.array(), 0, bytesRemain);
+            /*
             if (bytesRemain <= buffer.position())
             {
                 System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, bytesRemain);
@@ -317,12 +327,17 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                      remainBytes > 0;
                      remainBytes -= step, src += step, dest += step)
                 {
-                    System.arraycopy(buffer.array(), src, buffer.array(), dest, step);
+                    System.arraycopy(buffer.array(), src, buffer.array(), dest, step < remainBytes ? step : remainBytes);
                 }
             }
+            */
+            buffer.clear();
+            buffer.position(bytesRemain);
         }
-        buffer.clear();
-        buffer.position(bytesRemain);
+        else
+        {
+            throw new RuntimeException("leftAlignBuffer(ByteBuffer) got bytesRemain=" + bytesRemain + ", buffer.limit()=" + buffer.limit() + ", buffer.position()=" + buffer.position());
+        }
     }
 
     private boolean handshake() throws Exception
@@ -366,15 +381,13 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         // Stop the previous session by interrupting the thread.
         if (thread != null) {
             thread.interrupt();
-            thread = null;
         }
 
         if (ifd != null && ifd.getFd() >= 0) {
             try {
                 ifd.close();
             } catch (Exception e) {
-                Log.i(getText(R.string.log_tag).toString(), e.getClass().toString() +
-                        " destroy()->try->catch(Exception): " + e.getMessage());
+                Log.e(LOG_TAG, " destroy()->try->catch(Exception): " + e.getClass().toString() + ": " + e.getMessage());
             }
         }
     }
@@ -390,29 +403,33 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
 
     }
 
-    private boolean prepareUpstream() throws IOException
+    private boolean prepareUpstream()
     {
-        if (upstream != null && upstream.isConnected()) {
-            upstream.close();
+        try {
+            if (upstream != null && upstream.isConnected()) {
+                upstream.close();
+            }
+            upstream = SocketChannel.open();
+            if (!protect(upstream.socket())) {
+                throw new IllegalStateException("Cannot protect the upstream");
+            }
+            upstream.connect(serverAddr);
+            upstream.configureBlocking(false);
+        } catch (IOException e) {
+            logException(e, "prepareUpstream()->try-1->catch(IOException)");
+            return false;
         }
-        upstream = SocketChannel.open();
-        if (!protect(upstream.socket())) {
-            throw new IllegalStateException("Cannot protect the upstream");
-        }
-        upstream.connect(serverAddr);
-        upstream.configureBlocking(false);
         try {
             return handshake();
         } catch (Exception e) {
-            Log.i(getText(R.string.log_tag).toString(), e.getClass().toString() +
-                    "prepareUpstream(InetSocketAddress)->try->catch(Exception): " + e.getMessage());
+            logException(e, "prepareUpstream(InetSocketAddress)->try->catch(Exception)");
             return false;
         }
     }
 
     private void prepareIfd()
     {
-        Log.i(getText(R.string.log_tag).toString(), "allocate fd");
+        Log.i(LOG_TAG, "allocate fd");
         ifd = ifdBuilder.establish();
     }
 
@@ -424,5 +441,27 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             .setConfigureIntent(getConfigIntent())
             .addRoute("0.0.0.0", 0)
             .addAddress("10.0.0.2", 32);
+    }
+
+    private void logException(Exception e)
+    {
+        logException(e, "exception");
+    }
+
+    private void logException(Exception e, String extra)
+    {
+        StringBuilder buffer = new StringBuilder();
+        for (StackTraceElement frame: e.getStackTrace())
+        {
+            buffer.append(formatFrame(frame));
+            buffer.append("\n");
+        }
+        Log.e(LOG_TAG, extra + " <" + e.getClass().toString() + ">: [" + e.getMessage() + "]:\n" + buffer);
+    }
+
+    private String formatFrame(StackTraceElement frame)
+    {
+        return frame.toString();
+//        return "<" + frame.getClass().getName() + ">." + frame.getMethodName() + "():" + frame.getLineNumber();
     }
 }

@@ -32,16 +32,16 @@ final class Crypto
     {
         in.get(out.array(), out.position(), len);
 //        out.put(encor.doFinal(in.array(), 0, len));
-        out.clear();
         out.position(out.position() + len);
+        out.limit(out.capacity());
     }
 
     public final void decrypt(ByteBuffer in, int len, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
         in.get(out.array(), out.position(), len);
 //        out.put(encor.doFinal(in.array(), 0, len));
-        out.clear();
         out.position(out.position() + len);
+        out.limit(out.capacity());
     }
 
     public final void setEncKeyIv(byte[] key, byte[] iv)
