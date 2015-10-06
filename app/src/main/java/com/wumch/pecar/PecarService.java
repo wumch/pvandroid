@@ -13,7 +13,6 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -49,6 +48,9 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     private FileInputStream dsr;
     private FileOutputStream dsw;
 
+    private FileOutputStream dataOut;
+    private FileOutputStream packLenOut;
+
     public class ResCode
     {
         public static final int OK = 0;
@@ -66,12 +68,29 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             File file = new File(filePath);
             if (!file.exists()) {
                 if (!file.createNewFile()) {
-                    throw new RuntimeException("create file failed");
+                    throw new RuntimeException("create data file failed");
                 }
+            } else {
+                throw new RuntimeException("data file already exists");
             }
-            out = new FileOutputStream(file);
+            dataOut = new FileOutputStream(file);
         } catch (Exception e) {
-            logException(e, "file not found");
+            logException(e, "data file not found");
+        }
+
+        try {
+            String filePath = "/sdcard/pecar-packlen.txt";
+            File file = new File(filePath);
+            if (!file.exists()) {
+                if (!file.createNewFile()) {
+                    throw new RuntimeException("create packlen file failed");
+                }
+            } else {
+                throw new RuntimeException("packlen file already exists");
+            }
+            packLenOut = new FileOutputStream(file);
+        } catch (Exception e) {
+            logException(e, "pack-len file not found");
         }
 
         LOG_TAG = getText(R.string.log_tag).toString();
@@ -189,6 +208,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             bufdw = ByteBuffer.allocate(65536),
             bufur = ByteBuffer.allocate(65536),
             bufuw = ByteBuffer.allocate(65536);
+        byte[] cache = new byte[65536];
 
         int turn = 0;
         int continuedInactive = 0;
@@ -213,7 +233,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 inactive = false;
                 ++turn;
                 bufur.flip();
-                dumpData(bufur.array(), len);
                 crypto.decrypt(bufur, len, bufdw);
                 bufur.clear();
                 final int totalBytes = bufdw.position();
@@ -222,15 +241,14 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     int firstPackLen = bufdw.getShort(2) & 0xffff;
                     if (firstPackLen == totalBytes)
                     {
-//                        Log.i(LOG_TAG, "firstPackLen:" + firstPackLen);
                         dsw.write(bufdw.array(), 0, totalBytes);
                         bufdw.clear();
                     }
                     else if (firstPackLen < totalBytes)
                     {
                         bufdw.flip();
-                        while (dsWritePack(bufdw, bufur.array())) {}  // reuse bufur as cache
-                        leftAlignBuffer(bufdw, bufur.array());
+                        while (dsWritePack(bufdw, cache)) {}  // reuse bufur as cache
+                        leftAlignBuffer(bufdw, cache);
                         bufur.limit(bufur.capacity() - bufdw.position());
                     }
                     else
@@ -275,17 +293,28 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
     }
 
-    private FileOutputStream out;
-    private void dumpData(byte[] data, int len) throws IOException
+    private void dumpPackLen(int packLen)
+    {
+        try {
+            packLenOut.write((packLen + "\n").getBytes());
+        } catch (IOException e) {
+            logException(e, "write packlen falied");
+        }
+    }
+
+    private void dumpData(byte[] data, int len)
     {
         StringBuilder builder = new StringBuilder(len * 5);
         for (int i = 0; i < len; ++i)
         {
-            builder.append(Integer.toString((int)data[i]));
-            builder.append(",");
+            builder.append((int)data[i] + ",");
         }
         builder.append("\n");
-        out.write(builder.toString().getBytes());
+        try {
+            dataOut.write(builder.toString().getBytes());
+        } catch (IOException e) {
+            logException(e, "write dataOut falied");
+        }
     }
 
     private boolean dsWritePack(ByteBuffer data, byte[] cache) throws IOException
@@ -299,7 +328,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         else
         {
             data.get(cache, 0, packLen);
-//            Log.i(LOG_TAG, "packLen:" + packLen);
             dsw.write(cache, 0, packLen);
             return bytesRemain - packLen >= ipPackMinLen;
         }
