@@ -293,30 +293,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
     }
 
-    private void dumpPackLen(int packLen)
-    {
-        try {
-            packLenOut.write((packLen + "\n").getBytes());
-        } catch (IOException e) {
-            logException(e, "write packlen falied");
-        }
-    }
-
-    private void dumpData(byte[] data, int len)
-    {
-        StringBuilder builder = new StringBuilder(len * 5);
-        for (int i = 0; i < len; ++i)
-        {
-            builder.append((int)data[i] + ",");
-        }
-        builder.append("\n");
-        try {
-            dataOut.write(builder.toString().getBytes());
-        } catch (IOException e) {
-            logException(e, "write dataOut falied");
-        }
-    }
-
     private boolean dsWritePack(ByteBuffer data, byte[] cache) throws IOException
     {
         int packLen = data.getShort(data.position() + 2) & 0xffff;
