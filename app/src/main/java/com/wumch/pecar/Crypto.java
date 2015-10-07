@@ -28,21 +28,83 @@ final class Crypto
         LOG_TAG = logTag;
     }
 
-    public final void encrypt(ByteBuffer in, int len, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+/*
+    public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-        in.get(out.array(), out.position(), len);
+        in.get(out.array(), out.position(), in.limit());
 //        out.put(encor.doFinal(in.array(), 0, len));
-        out.position(out.position() + len);
+        out.position(out.position() + in.limit());
         out.limit(out.capacity());
     }
 
-    public final void decrypt(ByteBuffer in, int len, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-        in.get(out.array(), out.position(), len);
+        in.get(out.array(), out.position(), in.limit());
 //        out.put(encor.doFinal(in.array(), 0, len));
-        out.position(out.position() + len);
+        out.position(out.position() + in.limit());
         out.limit(out.capacity());
     }
+
+    public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return data;
+    }
+
+    public byte[] decrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return data;
+    }
+// */
+
+
+//*
+    public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+//        out.put(encor.update(in.array(), 0, in.limit()));
+        out.position(out.position() + encor.update(in.array(), 0, in.limit(), out.array(), out.position()));
+//        out.position(out.position() + encor.doFinal(out.array(), out.position()));
+    }
+
+    public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+//        out.put(decor.update(in.array(), 0, in.limit()));
+        out.position(out.position() + decor.update(in.array(), 0, in.limit(), out.array(), out.position()));
+//        out.position(out.position() + decor.doFinal(out.array(), out.position()));
+    }
+
+    public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return encor.update(data);
+    }
+
+    public byte[] decrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return decor.update(data);
+    }
+// */
+
+
+/*
+    public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        out.position(out.position() + encor.doFinal(in.array(), 0, in.limit(), out.array(), out.position()));
+    }
+
+    public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        out.position(out.position() + decor.doFinal(in.array(), 0, in.limit(), out.array(), out.position()));
+    }
+
+    public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return encor.doFinal(data);
+    }
+
+    public byte[] decrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
+    {
+        return decor.doFinal(data);
+    }
+// */
 
     public final void setEncKeyIv(byte[] key, byte[] iv)
     {
@@ -50,7 +112,7 @@ final class Crypto
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
         try {
             encor = Cipher.getInstance("AES/CFB/NoPadding");
-            encor.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
+            encor.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
         } catch (Exception e) {
             Log.i(LOG_TAG, e.getMessage());
         }
@@ -76,7 +138,7 @@ final class Crypto
         KeyGenerator keyGen = KeyGenerator.getInstance("AES");
         keyGen.init(KEY_BITS);
         SecureRandom random = SecureRandom.getInstance("SHA1PRNG");
-        random.setSeed(System.currentTimeMillis());
+        random.setSeed(System.currentTimeMillis()^ Thread.currentThread().getId() ^ (hashCode() * keyGen.hashCode()));
 
         int offset = 0;
 

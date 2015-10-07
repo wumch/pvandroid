@@ -11,7 +11,6 @@ import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 import android.widget.Toast;
 
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -48,9 +47,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     private FileInputStream dsr;
     private FileOutputStream dsw;
 
-    private FileOutputStream dataOut;
-    private FileOutputStream packLenOut;
-
     public class ResCode
     {
         public static final int OK = 0;
@@ -63,35 +59,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     public int onStartCommand(Intent intent, int flags, int startId)
     {
         destroy();
-        try {
-            String filePath = "/sdcard/pecar-client.txt";
-            File file = new File(filePath);
-            if (!file.exists()) {
-                if (!file.createNewFile()) {
-                    throw new RuntimeException("create data file failed");
-                }
-            } else {
-                throw new RuntimeException("data file already exists");
-            }
-            dataOut = new FileOutputStream(file);
-        } catch (Exception e) {
-            logException(e, "data file not found");
-        }
-
-        try {
-            String filePath = "/sdcard/pecar-packlen.txt";
-            File file = new File(filePath);
-            if (!file.exists()) {
-                if (!file.createNewFile()) {
-                    throw new RuntimeException("create packlen file failed");
-                }
-            } else {
-                throw new RuntimeException("packlen file already exists");
-            }
-            packLenOut = new FileOutputStream(file);
-        } catch (Exception e) {
-            logException(e, "pack-len file not found");
-        }
 
         LOG_TAG = getText(R.string.log_tag).toString();
         if (handler == null) {
@@ -221,7 +188,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             if (len > 0) {
                 inactive = false;
                 bufdr.limit(len);
-                crypto.encrypt(bufdr, len, bufuw);
+                crypto.encrypt(bufdr, bufuw);
                 bufuw.flip();
                 upstream.write(bufuw);
                 bufdr.clear();
@@ -233,7 +200,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 inactive = false;
                 ++turn;
                 bufur.flip();
-                crypto.decrypt(bufur, len, bufdw);
+                crypto.decrypt(bufur, bufdw);
                 bufur.clear();
                 final int totalBytes = bufdw.position();
                 if (totalBytes >= ipPackMinLen)
@@ -348,10 +315,12 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
     {
         ByteBuffer packet = ByteBuffer.allocate(128);
         packet.position(crypto.genKeyIvList(packet.array()));
-        packet.put((byte)username.length);
-        packet.put((byte)password.length);
-        packet.put(username);
-        packet.put(password);
+        byte[] userPass = new byte[2 + username.length + password.length];
+        userPass[0] = (byte)username.length;
+        userPass[1] = (byte)password.length;
+        System.arraycopy(username, 0, userPass, 2, username.length);
+        System.arraycopy(password, 0, userPass, 2 + username.length, password.length);
+        packet.put(crypto.encrypt(userPass));
         packet.flip();
         upstream.write(packet);
 
@@ -360,9 +329,10 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         for (int i = 0, end = (int)Math.ceil(authTimeout / interval); i < end; ++i) {
             Thread.sleep(interval);
             packet.limit(1);
-            if (upstream.read(packet) > 0) {
-                packet.position(0);
-                switch (packet.get(0))
+            if (upstream.read(packet) == 1) {
+                byte[] data = new byte[] { packet.get(0) };
+                data = crypto.decrypt(data);
+                switch (data[0])
                 {
                 case ResCode.OK:
                     return true;
