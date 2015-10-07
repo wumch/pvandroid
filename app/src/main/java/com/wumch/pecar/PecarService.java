@@ -175,9 +175,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             bufdw = ByteBuffer.allocate(65536),
             bufur = ByteBuffer.allocate(65536),
             bufuw = ByteBuffer.allocate(65536);
-        byte[] cache = new byte[65536];
 
-        int turn = 0;
         int continuedInactive = 0;
         boolean inactive, isFirstInactive = true;
         int continuedIdle = 0;
@@ -198,7 +196,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
             len = upstream.read(bufur);
             if (len > 0) {
                 inactive = false;
-                ++turn;
                 bufur.flip();
                 crypto.decrypt(bufur, bufdw);
                 bufur.clear();
@@ -214,8 +211,8 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     else if (firstPackLen < totalBytes)
                     {
                         bufdw.flip();
-                        while (dsWritePack(bufdw, cache)) {}  // reuse bufur as cache
-                        leftAlignBuffer(bufdw, cache);
+                        while (dsWritePack(bufdw, bufur.array())) {}  // reuse bufur as cache
+                        leftAlignBuffer(bufdw, bufur.array());
                         bufur.limit(bufur.capacity() - bufdw.position());
                     }
                     else
@@ -228,7 +225,7 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     bufur.limit(bufur.capacity() - totalBytes);
                 }
             }
-/*
+
             if (inactive)
             {
                 if (++continuedInactive > 10)
@@ -256,7 +253,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                 continuedIdle = 0;
                 isFirstInactive = true;
             }
-        // */
         }
     }
 
@@ -285,12 +281,14 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         }
         else if (bytesRemain > 0)
         {
-            System.arraycopy(buffer.array(), buffer.position(), cache, 0, bytesRemain);
-            System.arraycopy(cache, 0, buffer.array(), 0, bytesRemain);
-            /*
             if (bytesRemain <= buffer.position())
             {
                 System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, bytesRemain);
+            }
+            else if ((buffer.position() << 3) < bytesRemain && buffer.position() < 256)
+            {
+                System.arraycopy(buffer.array(), buffer.position(), cache, 0, bytesRemain);
+                System.arraycopy(cache, 0, buffer.array(), 0, bytesRemain);
             }
             else
             {
@@ -301,7 +299,6 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
                     System.arraycopy(buffer.array(), src, buffer.array(), dest, step < remainBytes ? step : remainBytes);
                 }
             }
-            */
             buffer.clear();
             buffer.position(bytesRemain);
         }
@@ -427,15 +424,9 @@ public class PecarService extends VpnService implements Handler.Callback, Runnab
         StringBuilder buffer = new StringBuilder();
         for (StackTraceElement frame: e.getStackTrace())
         {
-            buffer.append(formatFrame(frame));
+            buffer.append(frame.toString());
             buffer.append("\n");
         }
         Log.e(LOG_TAG, extra + " <" + e.getClass().toString() + ">: [" + e.getMessage() + "]:\n" + buffer);
-    }
-
-    private String formatFrame(StackTraceElement frame)
-    {
-        return frame.toString();
-//        return "<" + frame.getClass().getName() + ">." + frame.getMethodName() + "():" + frame.getLineNumber();
     }
 }

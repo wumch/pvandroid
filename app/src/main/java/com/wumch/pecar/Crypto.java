@@ -28,48 +28,14 @@ final class Crypto
         LOG_TAG = logTag;
     }
 
-/*
     public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-        in.get(out.array(), out.position(), in.limit());
-//        out.put(encor.doFinal(in.array(), 0, len));
-        out.position(out.position() + in.limit());
-        out.limit(out.capacity());
-    }
-
-    public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        in.get(out.array(), out.position(), in.limit());
-//        out.put(encor.doFinal(in.array(), 0, len));
-        out.position(out.position() + in.limit());
-        out.limit(out.capacity());
-    }
-
-    public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        return data;
-    }
-
-    public byte[] decrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        return data;
-    }
-// */
-
-
-//*
-    public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-//        out.put(encor.update(in.array(), 0, in.limit()));
         out.position(out.position() + encor.update(in.array(), 0, in.limit(), out.array(), out.position()));
-//        out.position(out.position() + encor.doFinal(out.array(), out.position()));
     }
 
     public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
     {
-//        out.put(decor.update(in.array(), 0, in.limit()));
         out.position(out.position() + decor.update(in.array(), 0, in.limit(), out.array(), out.position()));
-//        out.position(out.position() + decor.doFinal(out.array(), out.position()));
     }
 
     public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
@@ -81,30 +47,6 @@ final class Crypto
     {
         return decor.update(data);
     }
-// */
-
-
-/*
-    public final void encrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        out.position(out.position() + encor.doFinal(in.array(), 0, in.limit(), out.array(), out.position()));
-    }
-
-    public final void decrypt(ByteBuffer in, ByteBuffer out) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        out.position(out.position() + decor.doFinal(in.array(), 0, in.limit(), out.array(), out.position()));
-    }
-
-    public byte[] encrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        return encor.doFinal(data);
-    }
-
-    public byte[] decrypt(byte[] data) throws ShortBufferException, IllegalBlockSizeException, BadPaddingException
-    {
-        return decor.doFinal(data);
-    }
-// */
 
     public final void setEncKeyIv(byte[] key, byte[] iv)
     {
